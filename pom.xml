@@ -3,4 +3,39 @@
   <groupId>be.bull</groupId>
   <artifactId>prototype</artifactId>
   <version>0.0.1-SNAPSHOT</version>
+  <build>
+  	<plugins>
+  		<plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!-- http://maven.apache.org/plugins/maven-compiler-plugin/ -->
+          <source>1.6</source>
+          <target>1.6</target>
+        </configuration>
+      </plugin>
+  	</plugins>
+  </build>
+  <dependencies>
+  	<dependency>
+  		<groupId>org.apache.commons</groupId>
+  		<artifactId>commons-lang3</artifactId>
+  		<version>3.1</version>
+  	</dependency>
+  	<dependency>
+  		<groupId>junit</groupId>
+  		<artifactId>junit</artifactId>
+  		<version>4.10</version>
+  	</dependency>
+  	<dependency>
+  		<groupId>it.unimi.dsi</groupId>
+  		<artifactId>fastutil</artifactId>
+  		<version>6.4.1</version>
+  	</dependency>
+  	<dependency>
+  		<groupId>com.linkedin.kamikaze</groupId>
+  		<artifactId>kamikaze</artifactId>
+  		<version>3.0.5</version>
+  	</dependency>
+  </dependencies>
 </project>
