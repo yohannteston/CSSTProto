@@ -50,7 +50,7 @@ public class BasicTemporalIndexSeasonFactory implements FlightSeasonFactory {
             Flight flight = db.get(i);
             
             LocationOccupation adep = getOrCreateLocation(locations, flight.getDepartureAirport());
-            LocationOccupation ades = getOrCreateLocation(locations, flight.getDepartureAirport());
+            LocationOccupation ades = getOrCreateLocation(locations, flight.getDestinationAirport());
             
             
             int firstDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(flight.getFirstDayOfOperation().getTime() - firstDayOfSeason);

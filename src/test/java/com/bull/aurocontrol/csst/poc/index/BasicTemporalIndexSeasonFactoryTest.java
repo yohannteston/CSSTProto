@@ -56,7 +56,7 @@ public class BasicTemporalIndexSeasonFactoryTest {
     @Test
     public void testRealSource() {
         MemoryWatch memoryWatch = new MemoryWatch();
-        memoryWatch.start();
+       // memoryWatch.start();
         
         CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("5AO.csv"), new File("PROFILE_WITHOUT_CIRCULAR.csv"));
 
@@ -68,11 +68,31 @@ public class BasicTemporalIndexSeasonFactoryTest {
         Iterator<Flight> source = sourceFactory.iterate();
         
         FlightSeason season =  factory.buildFlightSeason(source, 30);
-        memoryWatch.stop();
+        //memoryWatch.stop();
         System.out.println(memoryWatch);
         System.out.println(season);
         
     }
     
+    @Test
+    public void testRealLucene() {
+        MemoryWatch memoryWatch = new MemoryWatch();
+       // memoryWatch.start();
+        
+        CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("5AO.csv"), new File("PROFILE_WITHOUT_CIRCULAR.csv"));
+
+        
+        
+        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory();
+        
+      
+        Iterator<Flight> source = sourceFactory.iterate();
+        
+        FlightSeason season =  factory.buildFlightSeason(source, 30);
+      //  memoryWatch.stop();
+        System.out.println(memoryWatch);
+        System.out.println(season);
+        
+    }
 
 }
