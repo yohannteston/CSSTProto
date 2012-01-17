@@ -9,7 +9,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import com.bull.aurocontrol.csst.poc1.Flight;
+import com.bull.aurocontrol.csst.poc.Flight;
 
 public class CSVFlightSourceFactoryTest {
 
@@ -21,9 +21,9 @@ public class CSVFlightSourceFactoryTest {
     public void tearDown() throws Exception {
     }
 
-    @Test
+    
     public void testIterate() {
-        CSVFlightSourceFactory factory = new CSVFlightSourceFactory(new File("CSS_SCHEDULE-FINS11.csv"), new File("PROFILE_WITHOUT_CIRCULAR.csv"));
+        CSVFlightSourceFactory factory = new CSVFlightSourceFactory(new File("5AO.csv"), new File("PROFILE_WITHOUT_CIRCULAR.csv"));
         Iterator<Flight> iterator = factory.iterate();
         while (iterator.hasNext()) {
             Flight flight = (Flight) iterator.next();

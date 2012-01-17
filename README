@@ -1,0 +1,3 @@
+Add the jamon lib to the local repository
+
+mvn install:install-file -Dfile=./lib/jamonall-2.73/binaries/jamon-2.73.jar -DgroupId=com.jamonapi -DartifactId=jamon -Dversion=2.73 -Dpackaging=jar -DgeneratePom=true

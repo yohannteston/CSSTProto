@@ -1,0 +1,8 @@
+Label	Units	Hits	Avg	Total	StdDev	LastValue	Min	Max	Active	AvgActive	MaxActive	FirstAccess	LastAccess	Enabled	Primary	HasListeners	LessThan_0ms	0_10ms	10_20ms	20_40ms	40_80ms	80_160ms	160_320ms	320_640ms	640_1280ms	1280_2560ms	2560_5120ms	5120_10240ms	10240_20480ms	GreaterThan_20480ms
+_TOTAL_	ms.	1.0	32309.0	32309.0	0.0	32309.0	32309.0	32309.0	0.0	1.0	1.0	Tue Jan 17 23:05:22 GMT 2012	Tue Jan 17 23:05:22 GMT 2012	true	true	false														1/32Ê309 (0/0/0)
+index	ms.	1.0	15845.0	15845.0	0.0	15845.0	15845.0	15845.0	0.0	1.0	1.0	Tue Jan 17 23:05:08 GMT 2012	Tue Jan 17 23:05:08 GMT 2012	true	false	false													1/15Ê845 (0/0/0)	
+index/loading	ms.	1.0	58.0	58.0	0.0	58.0	58.0	58.0	0.0	1.0	1.0	Tue Jan 17 23:04:53 GMT 2012	Tue Jan 17 23:04:53 GMT 2012	true	false	false					1/58 (0/0/0)									
+index/lucene	ms.	1.0	15785.0	15785.0	0.0	15785.0	15785.0	15785.0	0.0	1.0	1.0	Tue Jan 17 23:05:08 GMT 2012	Tue Jan 17 23:05:08 GMT 2012	true	false	false													1/15Ê785 (0/0/0)	
+overlaps	ms.	1.0	8816.0	8816.0	0.0	8816.0	8816.0	8816.0	0.0	1.0	1.0	Tue Jan 17 23:05:17 GMT 2012	Tue Jan 17 23:05:17 GMT 2012	true	true	false												1/8Ê816 (0/0/0)		
+rule_check	ms.	1.0	1018.0	1018.0	0.0	1018.0	1018.0	1018.0	0.0	1.0	1.0	Tue Jan 17 23:05:18 GMT 2012	Tue Jan 17 23:05:18 GMT 2012	true	false	false									1/1Ê018 (0/0/0)					
+rule_conflict schedules output	ms.	1.0	3519.0	3519.0	0.0	3519.0	3519.0	3519.0	0.0	1.0	1.0	Tue Jan 17 23:05:22 GMT 2012	Tue Jan 17 23:05:22 GMT 2012	true	false	false											1/3Ê519 (0/0/0)			
