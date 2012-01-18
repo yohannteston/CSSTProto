@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.util.TreeSet;
 
+import jsr166y.ForkJoinPool;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.HelpFormatter;
@@ -94,13 +96,14 @@ public class Conflict {
             File conflicts = (cmd.hasOption("c")) ? new File(cmd.getOptionValue("c")) : null;
             File jamon = (cmd.hasOption("j")) ? new File(cmd.getOptionValue("j")) : null;
             
+            ForkJoinPool pool = new ForkJoinPool(threads);
             System.out.println("Warming up: the process is done once to emulate normal server JIT optimization.");
-            doTest(input, catalog, conflicts, threads, periods, buffer);
+            doTest(input, catalog, conflicts, threads, periods, buffer, pool);
             MemoryWatch.gc();
             MonitorFactory.reset();
             System.out.printf("Now reperating the process %s times and take the performance measures. Each time ensure gc()\n", repeat);
             for (int i = 0; i < repeat; i++) {
-                doTest(input, catalog, conflicts, threads, periods, buffer);                
+                doTest(input, catalog, conflicts, threads, periods, buffer, pool);                
                 MemoryWatch.gc();
             }
             
@@ -175,7 +178,7 @@ public class Conflict {
         }
     }
 
-    private static void doTest(File input, File catalog, File conflicts, int threads, int periods, final int buffer) throws IOException {
+    private static void doTest(File input, File catalog, File conflicts, int threads, int periods, final int buffer, ForkJoinPool pool) throws IOException {
         Monitor global = MonitorFactory.startPrimary("_TOTAL_");
 
         CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(input, catalog);
@@ -184,7 +187,7 @@ public class Conflict {
 
         Iterator<Flight> source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, buffer);
+        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, buffer, pool);
          
         SMatrix<Integer> overlapMatrix = season.queryOverlaps(threads);
         //System.out.println(overlapMatrix);

@@ -6,6 +6,8 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
+import jsr166y.ForkJoinPool;
+
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.junit.After;
@@ -39,13 +41,14 @@ public class BasicTemporalIndexSeasonFactoryTest {
     @Test
     public void testPeriods() throws IOException {
 
+        ForkJoinPool pool = new ForkJoinPool(1);
         CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("Results/test-flights.csv"), new File("Results/catalog.csv"));
 
         LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(1);
 
         Iterator<Flight> source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25);
+        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25, pool);
 
         
         SMatrix<Integer> overlaps1 = season.queryOverlaps(1);
@@ -54,7 +57,7 @@ public class BasicTemporalIndexSeasonFactoryTest {
 
         source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season2 =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25);
+        final LuceneFlightSeason season2 =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25, pool);
 
         
         SMatrix<Integer> overlaps2 = season2.queryOverlaps(1);

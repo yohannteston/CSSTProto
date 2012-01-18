@@ -77,7 +77,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
 
     @Override
-    public FlightSeason buildFlightSeason(Iterator<Flight> source, int bufferDuration) {
+    public FlightSeason buildFlightSeason(Iterator<Flight> source, int bufferDuration, ForkJoinPool pool) {
         Monitor mon = MonitorFactory.start("index");
         Monitor phase = MonitorFactory.start("index/loading");
 
@@ -112,131 +112,9 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         phase.stop();        
         phase = MonitorFactory.start("index/lucene");
 
-        int totalSchedules = 0;
 
-        DayOfWeek dowOfFirstDayOfSeason = DayOfWeek.get(firstDayOfSeason);
-
-        Directory dir = new RAMDirectory();
-        IndexWriterConfig config = new IndexWriterConfig(Version.LUCENE_35, new KeywordAnalyzer());
-        config.setRAMBufferSizeMB(256);
         try {   
-            IndexWriter writer = new IndexWriter(dir,config);
-            for (int i = 0, endi = db.size(); i < endi; i++) {
-                Flight flight = db.get(i);
-
-                FlightSchedule[] schedules = flight.getSchedules();
-                final int numSched = schedules.length;
-
-                totalSchedules += numSched;
-
-                Document doc = new Document();
-                doc.add(new UIDField("_UID_", i));
-                int eobt = flight.getEobt();
-                int eta = flight.getEta();
-
-
-                MultiMap flightLocations = new MultiValueMap();
-                
-                int numAirspace = flight.countAirspace();
-
-                // profiling flight
-                if (numAirspace > 0) {
-                    FlightProfile profile = flight.getProfile();
-                    int etot = eobt + profile.getTaxitime();
-                    int duration = eta - eobt;
-
-                    if (profile.getDuration() == 0) {
-                        if (numAirspace == 1 && flight.getAirspace(0).getStart() == 0) {
-                            flightLocations.put(flight.getAirspace(0).getName(), new MutablePair<Integer, Integer>(eobt - bufferDuration,eta + bufferDuration));
-                        } else {
-                            throw new RuntimeException("invalid catalog ?");
-                        }
-                    } else {
-                        for (int k = 0; k < numAirspace; k++) {
-                            AirspaceProfile airspace = flight.getAirspace(k);
-                            
-                            int airspaceStart  = etot + airspace.getStart() * duration / profile.getDuration() - bufferDuration;
-                            int airspaceEnd = etot + airspace.getEnd() * duration / profile.getDuration() + bufferDuration;
-                            String name = airspace.getName();
-                            
-                            add(flightLocations, airspaceStart, airspaceEnd, name);
-                            
-                        }                    
-
-                    }
-                }
-                int startADEP = eobt - bufferDuration;
-                int endADEP = eobt + bufferDuration;
-                int startADES = eta - bufferDuration;
-                int endADES = eta + bufferDuration;
-                add(flightLocations, startADEP, endADEP, flight.getDepartureAirport());
-                add(flightLocations, startADES, endADES, flight.getDestinationAirport());
-                
-//                if (i == 2968) {
-//                    System.out.println(flight);
-//                    System.out.println(flightLocations);
-//                }
-
-
-                // add values for the week index
-                EnumSet<DayOfWeek> dowIndexed = EnumSet.noneOf(DayOfWeek.class);
-                for (int schedI = 0; schedI < numSched; schedI++) {
-                    FlightSchedule sched = schedules[schedI];
-                    dowIndexed.addAll(sched.getDaysOfOperation());
-                }
-                
-                
-                for (DayOfWeek dayOfWeek : dowIndexed) {
-                    int dayOrd = (dayOfWeek.ordinal() - dowOfFirstDayOfSeason.ordinal() + 7) % 7; 
-                    int firstMinuteOfDay = dayOrd * MINUTE_PER_DAY;
-                    
-                    for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
-                            : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
-                        for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
-                            addToWeekIndex(doc, locIntervals.getKey(), firstMinuteOfDay + interval.getLeft(), firstMinuteOfDay +interval.getRight(), i);
-                        }
-                    }
-
-                    dowIndexed.add(dayOfWeek);
-                }
-
-
-                // add to season index
-                for (int schedI = 0; schedI < numSched; schedI++) {
-                    FlightSchedule sched = schedules[schedI];
-                    EnumSet<DayOfWeek> dowOfOperation = sched.getDaysOfOperation();
-
-
-
-                    // add values to season index
-                    DayOfWeek dow = DayOfWeek.get(sched.getFirstDayOfOperation());
-                    int firstDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(sched.getFirstDayOfOperation() - firstDayOfSeason);
-                    int lastDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(sched.getLastDayOfOperation() - firstDayOfSeason);
-
-
-                    for (int dayOfSeason = firstDayOfOpInSeason; dayOfSeason <= lastDayOfOpInSeason; dayOfSeason++, dow = dow.next()) {
-                        if (dowOfOperation.contains(dow)) {
-                            int firstMinuteOfDay = dayOfSeason * MINUTE_PER_DAY;
-
-                            for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
-                                    : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
-                                for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
-                                    addLocation(doc, locIntervals.getKey(), firstMinuteOfDay + interval.getLeft(), firstMinuteOfDay +interval.getRight());
-                                }
-                            }
-                        }
-                    }
-
-                }
-
-
-                //if (flight.getCfn().equals("003") || flight.getCfn().equals("2203"))
-
-                writer.addDocument(doc);
-            }
-
-            writer.commit();
-            writer.close();
+            Directory dir = preparePeriodLuceneIndex(bufferDuration, firstDayOfSeason, db);
 
             IndexReader reader = IndexReader.open(dir);
             int[] uids = UIDField.load(reader, "_UID_");
@@ -244,16 +122,13 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             phase.stop();
             mon.stop();        
 
-            System.out.printf("number of flights : %s\n", db.size());
-            System.out.printf("number of schedules : %s\n", totalSchedules);
-            System.out.printf("number of doc in index : %s\n", reader.numDocs());
 
 
-            Directory to = new NIOFSDirectory(new File("backup"));
-            for (String file : dir.listAll()) {
-                dir.copy(to, file, file); 
-            }
-            to.close();
+//            Directory to = new NIOFSDirectory(new File("backup"));
+//            for (String file : dir.listAll()) {
+//                dir.copy(to, file, file); 
+//            }
+//            to.close();
 
             return new LuceneFlightSeason(reader, locations, periodDuration, uids, db.toArray(new Flight[db.size()]));
 
@@ -268,6 +143,155 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             e.printStackTrace();
         }
         return null;
+    }
+
+
+    private Directory preparePeriodLuceneIndex(int bufferDuration, long firstDayOfSeason, List<Flight> db) throws CorruptIndexException,
+            LockObtainFailedException, IOException {
+        int totalSchedules = 0;
+        DayOfWeek dowOfFirstDayOfSeason = DayOfWeek.get(firstDayOfSeason);
+
+        Directory dir = new RAMDirectory();
+        IndexWriterConfig config = new IndexWriterConfig(Version.LUCENE_35, new KeywordAnalyzer());
+        config.setRAMBufferSizeMB(256);
+
+        IndexWriter writer = new IndexWriter(dir,config);
+        for (int i = 0, endi = db.size(); i < endi; i++) {
+            Flight flight = db.get(i);
+
+            FlightSchedule[] schedules = flight.getSchedules();
+            final int numSched = schedules.length;
+
+            totalSchedules += numSched;
+
+            Document doc = new Document();
+            doc.add(new UIDField("_UID_", i));
+
+            MultiMap flightLocations = prepareLocationIntervals(bufferDuration, flight);
+            
+//                if (i == 2968) {
+//                    System.out.println(flight);
+//                    System.out.println(flightLocations);
+//                }
+
+
+            // add values for the week index
+            addWeekIndex(doc, i, dowOfFirstDayOfSeason, schedules, numSched, flightLocations);
+
+
+            // add to season index
+            addToSeasonIndex(doc, schedules, numSched, firstDayOfSeason, flightLocations);
+
+
+            //if (flight.getCfn().equals("003") || flight.getCfn().equals("2203"))
+
+            writer.addDocument(doc);
+        }
+
+        writer.commit();
+        writer.close();
+        System.out.printf("number of flights : %s\n", db.size());
+        System.out.printf("number of schedules : %s\n", totalSchedules);
+        return dir;
+    }
+
+
+    private MultiMap prepareLocationIntervals(int bufferDuration, Flight flight) {
+        int eobt = flight.getEobt();
+        int eta = flight.getEta();
+
+
+        MultiMap flightLocations = new MultiValueMap();
+        
+        int numAirspace = flight.countAirspace();
+
+        // profiling flight
+        if (numAirspace > 0) {
+            FlightProfile profile = flight.getProfile();
+            int etot = eobt + profile.getTaxitime();
+            int duration = eta - eobt;
+
+            if (profile.getDuration() == 0) {
+                if (numAirspace == 1 && flight.getAirspace(0).getStart() == 0) {
+                    flightLocations.put(flight.getAirspace(0).getName(), new MutablePair<Integer, Integer>(eobt - bufferDuration,eta + bufferDuration));
+                } else {
+                    throw new RuntimeException("invalid catalog ?");
+                }
+            } else {
+                for (int k = 0; k < numAirspace; k++) {
+                    AirspaceProfile airspace = flight.getAirspace(k);
+                    
+                    int airspaceStart  = etot + airspace.getStart() * duration / profile.getDuration() - bufferDuration;
+                    int airspaceEnd = etot + airspace.getEnd() * duration / profile.getDuration() + bufferDuration;
+                    String name = airspace.getName();
+                    
+                    add(flightLocations, airspaceStart, airspaceEnd, name);
+                    
+                }                    
+
+            }
+        }
+        int startADEP = eobt - bufferDuration;
+        int endADEP = eobt + bufferDuration;
+        int startADES = eta - bufferDuration;
+        int endADES = eta + bufferDuration;
+        add(flightLocations, startADEP, endADEP, flight.getDepartureAirport());
+        add(flightLocations, startADES, endADES, flight.getDestinationAirport());
+        return flightLocations;
+    }
+
+
+    private void addWeekIndex(Document doc, int i, DayOfWeek dowOfFirstDayOfSeason, FlightSchedule[] schedules, final int numSched, MultiMap flightLocations) {
+        EnumSet<DayOfWeek> dowIndexed = EnumSet.noneOf(DayOfWeek.class);
+        for (int schedI = 0; schedI < numSched; schedI++) {
+            FlightSchedule sched = schedules[schedI];
+            dowIndexed.addAll(sched.getDaysOfOperation());
+        }
+        
+        
+        for (DayOfWeek dayOfWeek : dowIndexed) {
+            int dayOrd = (dayOfWeek.ordinal() - dowOfFirstDayOfSeason.ordinal() + 7) % 7; 
+            int firstMinuteOfDay = dayOrd * MINUTE_PER_DAY;
+            
+            for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
+                    : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
+                for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
+                    addToWeekIndex(doc, locIntervals.getKey(), firstMinuteOfDay + interval.getLeft(), firstMinuteOfDay +interval.getRight(), i);
+                }
+            }
+
+            dowIndexed.add(dayOfWeek);
+        }
+    }
+
+
+    private void addToSeasonIndex(Document doc, FlightSchedule[] schedules, final int numSched, long firstDayOfSeason, MultiMap flightLocations) {
+        for (int schedI = 0; schedI < numSched; schedI++) {
+            FlightSchedule sched = schedules[schedI];
+            EnumSet<DayOfWeek> dowOfOperation = sched.getDaysOfOperation();
+
+
+
+            // add values to season index
+            DayOfWeek dow = DayOfWeek.get(sched.getFirstDayOfOperation());
+            int firstDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(sched.getFirstDayOfOperation() - firstDayOfSeason);
+            int lastDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(sched.getLastDayOfOperation() - firstDayOfSeason);
+
+
+            for (int dayOfSeason = firstDayOfOpInSeason; dayOfSeason <= lastDayOfOpInSeason; dayOfSeason++, dow = dow.next()) {
+                if (dowOfOperation.contains(dow)) {
+                    int firstMinuteOfDay = dayOfSeason * MINUTE_PER_DAY;
+
+                    for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
+                            : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
+                        for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
+                            addLocation(doc, locIntervals.getKey(), firstMinuteOfDay + interval.getLeft(), firstMinuteOfDay +interval.getRight());
+                        }
+                    }
+                }
+            }
+
+        }
     }
 
 
