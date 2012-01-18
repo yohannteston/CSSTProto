@@ -44,7 +44,9 @@ public class SMatrix<V>   {
             @Override
             public SVector<V> combine(SVector<V> a, SVector<V> b) {
                 
-                return SVector.combine(a, b, combiner);
+                SVector<V> combined = SVector.combine(a, b, combiner);
+                if (combined.size() == 0) return null;
+                return combined;
             }
             
         });

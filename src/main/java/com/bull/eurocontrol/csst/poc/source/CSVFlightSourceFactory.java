@@ -9,6 +9,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.EnumSet;
@@ -252,7 +253,7 @@ public class CSVFlightSourceFactory implements FlightSourceFactory {
             final CSVCursor cursor = new CSVCursor(file);
             
       
-            LinkedHashMap<MultiKey, Flight> grouping = new LinkedHashMap<MultiKey, Flight>();
+            final LinkedHashMap<MultiKey, Flight> grouping = new LinkedHashMap<MultiKey, Flight>();
             
             for (Iterator<Flight> iterator = new CSVFlightIterator(profiles, cursor); iterator.hasNext();) {
                 Flight f = iterator.next();
@@ -270,7 +271,27 @@ public class CSVFlightSourceFactory implements FlightSourceFactory {
                 
             }
             
-            return grouping.values().iterator();
+            
+            return new Iterator<Flight>() {
+                Iterator<Flight> flights = grouping.values().iterator();
+                
+                @Override
+                public boolean hasNext() {                   
+                    return flights.hasNext();
+                }
+
+                @Override
+                public Flight next() {
+                    Flight r = flights.next();
+                    flights.remove(); // allow clean up
+                    return r;
+                }
+
+                @Override
+                public void remove() {
+                }
+            };
+                   
 //            return new CSVFlightIterator(profiles, cursor);
         } catch (IOException e) {
             throw new RuntimeException(e);

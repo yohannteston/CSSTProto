@@ -19,6 +19,8 @@ import com.bull.aurocontrol.csst.poc.index.rules.AnagramsRule;
 import com.bull.aurocontrol.csst.poc.index.rules.IdenticalFinalDigitsRule;
 import com.bull.aurocontrol.csst.poc.index.rules.ParallelCharactersRule;
 import com.bull.eurocontrol.csst.poc.source.CSVFlightSourceFactory;
+import com.bull.eurocontrol.csst.poc.utils.Combiner;
+import com.bull.eurocontrol.csst.poc.utils.IJClosure;
 import com.bull.eurocontrol.csst.poc.utils.IJTransformer;
 import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.jamonapi.Monitor;
@@ -34,78 +36,56 @@ public class BasicTemporalIndexSeasonFactoryTest {
     public void tearDown() throws Exception {
     }
 
-    
-    public void testRealLucene() throws IOException {
-        Monitor global = MonitorFactory.startPrimary("global");
+    @Test
+    public void testPeriods() throws IOException {
 
-        CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("5AO.csv"), new File("PROFILE_WITHOUT_CIRCULAR.csv"));
+        CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("Results/test-flights.csv"), new File("Results/catalog.csv"));
 
-
-
-        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(4);
-
+        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(1);
 
         Iterator<Flight> source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, 120);
+        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25);
 
         
-        SMatrix<Integer> overlaps = season.queryOverlaps(4);
+        SMatrix<Integer> overlaps1 = season.queryOverlaps(1);
         
-        //System.out.println(overlaps);
+        factory = new LuceneIndexSeasonFactory(2);
+
+        source = sourceFactory.iterate();
+
+        final LuceneFlightSeason season2 =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25);
+
         
-        Monitor phase = MonitorFactory.start("rule_check");
+        SMatrix<Integer> overlaps2 = season2.queryOverlaps(1);
         
-        final AnagramsRule anagramsRule = new AnagramsRule();
-        final IdenticalFinalDigitsRule digitsRule = new IdenticalFinalDigitsRule();
-        final ParallelCharactersRule parallelCharactersRule = new ParallelCharactersRule();
-        
-        final List<FlightPairData> conflicts = new ArrayList<FlightPairData>(100000);
-        
-        overlaps.transform(new IJTransformer() {
+        SMatrix<Integer> deltas = SMatrix.combine(overlaps1, overlaps2, new Combiner<Integer>() {
 
             @Override
-            public Object transform(int i, int j, Object val) {
-                Flight fi = season.getFlight(i);
-                Flight fj = season.getFlight(j);
-        
-                Integer duration = (Integer) val;
-                
-                FlightPairData result = new FlightPairData(fi,fj,duration.intValue());
-                
-                result.setAnagram(anagramsRule.check(fi, fj));
-                result.setIdenticalDigits(digitsRule.check(fi, fj));
-                result.setParallelCharacters(parallelCharactersRule.check(fi, fj));
-                
-                if (result.isAnagram() || result.isIdenticalDigits() || result.isParallelCharacters()) {
-                    conflicts.add(result);
+            public Integer combine(Integer a, Integer b) {
+                if (a.equals(b)) {
+                    return null;
                 }
-                
-                return null;
+                return a - b;
             }
             
         });
-        phase.stop();
-        
-        System.out.println(conflicts.size());
-        
+        deltas.execute(new IJClosure<Integer>() {
 
-        global.stop();
-
-        String[] header = MonitorFactory.getComposite("ms.").getDisplayHeader();
-        Object[][] data = MonitorFactory.getComposite("ms.").getDisplayData();
-        
-        System.out.println(StringUtils.join(header,'\t'));
-        for (int i = 0; i < data.length; i++) {
-            System.out.println(StringUtils.join(data[i],'\t'));
+            @Override
+            public void execute(int i, int j, Integer input) {
+               System.out.println(season.getFlight(i));
+               System.out.println(season.getFlight(j));
+               System.out.println(i);
+               System.out.println(j);
+               System.exit(-1);
+            }
             
-        }
+        });
+        
+        System.out.println(deltas);
+        System.out.println(deltas.size());
     }
 
-    public static void main(String[] args) throws IOException {
-        BasicTemporalIndexSeasonFactoryTest  test = new BasicTemporalIndexSeasonFactoryTest();
-
-        test.testRealLucene();
-    }
 
 }

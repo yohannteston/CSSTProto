@@ -12,14 +12,23 @@ import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+import jsr166y.ForkJoinPool;
+
+import org.apache.commons.collections.MultiHashMap;
+import org.apache.commons.collections.MultiMap;
+import org.apache.commons.collections.map.MultiValueMap;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.lucene.analysis.KeywordAnalyzer;
 import org.apache.lucene.document.Document;
@@ -55,10 +64,11 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
     public static final int MINUTE_PER_WEEK = MINUTE_PER_DAY * 7;
     private int periodDuration;
     private int periodPerWeek;
+    private ForkJoinPool pool;
 
-    
 
-    
+
+
     public LuceneIndexSeasonFactory(int periodPerDay) {
         super();
         periodDuration = MINUTE_PER_DAY / periodPerDay;
@@ -70,7 +80,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
     public FlightSeason buildFlightSeason(Iterator<Flight> source, int bufferDuration) {
         Monitor mon = MonitorFactory.start("index");
         Monitor phase = MonitorFactory.start("index/loading");
-        
+
         long firstDayOfSeason = Long.MAX_VALUE;
         long lastDayOfSeason = Long.MIN_VALUE;
 
@@ -92,7 +102,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             if (firstDayOfSeason > fFirstDayOfOperation) {
                 firstDayOfSeason = fFirstDayOfOperation;
             }
-            
+
             final long fLastDayOfOperation = flight.getLastDayOfOperation();
             if (lastDayOfSeason < fLastDayOfOperation) {
                 lastDayOfSeason = fLastDayOfOperation;
@@ -105,7 +115,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         int totalSchedules = 0;
 
         DayOfWeek dowOfFirstDayOfSeason = DayOfWeek.get(firstDayOfSeason);
-        
+
         Directory dir = new RAMDirectory();
         IndexWriterConfig config = new IndexWriterConfig(Version.LUCENE_35, new KeywordAnalyzer());
         config.setRAMBufferSizeMB(256);
@@ -113,22 +123,23 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             IndexWriter writer = new IndexWriter(dir,config);
             for (int i = 0, endi = db.size(); i < endi; i++) {
                 Flight flight = db.get(i);
-                
+
                 FlightSchedule[] schedules = flight.getSchedules();
                 final int numSched = schedules.length;
 
                 totalSchedules += numSched;
-                
+
                 Document doc = new Document();
                 doc.add(new UIDField("_UID_", i));
                 int eobt = flight.getEobt();
                 int eta = flight.getEta();
-                
+
+
+                MultiMap flightLocations = new MultiValueMap();
                 
                 int numAirspace = flight.countAirspace();
-                int[] airspaceStart = new int[numAirspace];
-                int[] airspaceEnd = new int[numAirspace]; 
-                
+
+                // profiling flight
                 if (numAirspace > 0) {
                     FlightProfile profile = flight.getProfile();
                     int etot = eobt + profile.getTaxitime();
@@ -136,110 +147,90 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
                     if (profile.getDuration() == 0) {
                         if (numAirspace == 1 && flight.getAirspace(0).getStart() == 0) {
-                            airspaceStart[0] = eobt;
-                            airspaceEnd[0] = eta;
+                            flightLocations.put(flight.getAirspace(0).getName(), new MutablePair<Integer, Integer>(eobt - bufferDuration,eta + bufferDuration));
                         } else {
                             throw new RuntimeException("invalid catalog ?");
                         }
                     } else {
                         for (int k = 0; k < numAirspace; k++) {
                             AirspaceProfile airspace = flight.getAirspace(k);
-    
-                            airspaceStart[k] = etot + airspace.getStart() * duration / profile.getDuration();
-                            airspaceEnd[k] = etot + airspace.getEnd() * duration / profile.getDuration();
+                            
+                            int airspaceStart  = etot + airspace.getStart() * duration / profile.getDuration() - bufferDuration;
+                            int airspaceEnd = etot + airspace.getEnd() * duration / profile.getDuration() + bufferDuration;
+                            String name = airspace.getName();
+                            
+                            add(flightLocations, airspaceStart, airspaceEnd, name);
+                            
                         }                    
+
                     }
                 }
-
-                // calc entering and leaving from profile
-//                if (flight.getCfn().equals("1014") || flight.getCfn().equals("1144")) {
+                int startADEP = eobt - bufferDuration;
+                int endADEP = eobt + bufferDuration;
+                int startADES = eta - bufferDuration;
+                int endADES = eta + bufferDuration;
+                add(flightLocations, startADEP, endADEP, flight.getDepartureAirport());
+                add(flightLocations, startADES, endADES, flight.getDestinationAirport());
+                
+//                if (i == 2968) {
 //                    System.out.println(flight);
-//                    System.out.println(Arrays.toString(flight.getAirspaces()));
-//                    System.out.println(Arrays.toString(airspaceStart));
-//                    System.out.println(Arrays.toString(airspaceEnd));
+//                    System.out.println(flightLocations);
 //                }
 
-                
+
                 // add values for the week index
                 EnumSet<DayOfWeek> dowIndexed = EnumSet.noneOf(DayOfWeek.class);
                 for (int schedI = 0; schedI < numSched; schedI++) {
                     FlightSchedule sched = schedules[schedI];
                     dowIndexed.addAll(sched.getDaysOfOperation());
                 }
+                
+                
                 for (DayOfWeek dayOfWeek : dowIndexed) {
                     int dayOrd = (dayOfWeek.ordinal() - dowOfFirstDayOfSeason.ordinal() + 7) % 7; 
-                    int start = (dayOrd * MINUTE_PER_DAY + eobt - bufferDuration);
-                    int end = (dayOrd * MINUTE_PER_DAY + eobt + bufferDuration);
-
-                    addToWeekIndex(doc, flight.getDepartureAirport(), start, end);
-
-                    start = (dayOrd * MINUTE_PER_DAY + eta - bufferDuration);
-                    end = (dayOrd * MINUTE_PER_DAY + eta + bufferDuration);
-
-                    addToWeekIndex(doc, flight.getDestinationAirport(), start, end);
-
-
-                    for (int k = 0; k < numAirspace; k++) {
-                        AirspaceProfile airspace = flight.getAirspace(k);
-
-                        start = (dayOrd * MINUTE_PER_DAY + airspaceStart[k] - bufferDuration);
-                        end = (dayOrd * MINUTE_PER_DAY + airspaceEnd[k] + bufferDuration);
-
-                        addToWeekIndex(doc, airspace.getName(), start, end);
+                    int firstMinuteOfDay = dayOrd * MINUTE_PER_DAY;
+                    
+                    for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
+                            : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
+                        for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
+                            addToWeekIndex(doc, locIntervals.getKey(), firstMinuteOfDay + interval.getLeft(), firstMinuteOfDay +interval.getRight(), i);
+                        }
                     }
 
                     dowIndexed.add(dayOfWeek);
                 }
 
-                
+
                 // add to season index
                 for (int schedI = 0; schedI < numSched; schedI++) {
                     FlightSchedule sched = schedules[schedI];
                     EnumSet<DayOfWeek> dowOfOperation = sched.getDaysOfOperation();
-                    
-                    
-                    
+
+
+
                     // add values to season index
                     DayOfWeek dow = DayOfWeek.get(sched.getFirstDayOfOperation());
                     int firstDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(sched.getFirstDayOfOperation() - firstDayOfSeason);
                     int lastDayOfOpInSeason = (int) TimeUnit.MILLISECONDS.toDays(sched.getLastDayOfOperation() - firstDayOfSeason);
 
-//                    if (flight.getCfn().equals("006") || flight.getCfn().equals("3206")) {
-//                        System.out.println(dow);
-//                        System.out.println(DayOfWeek.get(sched.getFirstDayOfOperation()));
-//                        System.out.println(new java.util.Date(sched.getFirstDayOfOperation()));
-//                        System.out.println(new java.util.Date(sched.getLastDayOfOperation()));
-//                        System.out.println(firstDayOfOpInSeason);
-//                        System.out.println(lastDayOfOpInSeason);
-//                    }
-                    
+
                     for (int dayOfSeason = firstDayOfOpInSeason; dayOfSeason <= lastDayOfOpInSeason; dayOfSeason++, dow = dow.next()) {
                         if (dowOfOperation.contains(dow)) {
-                            int start = (dayOfSeason * MINUTE_PER_DAY + eobt - bufferDuration);
-                            int end = (dayOfSeason * MINUTE_PER_DAY + eobt + bufferDuration);
+                            int firstMinuteOfDay = dayOfSeason * MINUTE_PER_DAY;
 
-                            addLocation(doc, flight.getDepartureAirport(), start, end);
-
-                            start = (dayOfSeason * MINUTE_PER_DAY + eta - bufferDuration);
-                            end = (dayOfSeason * MINUTE_PER_DAY + eta + bufferDuration);
-
-                            addLocation(doc, flight.getDestinationAirport(), start, end);
-
-                            for (int k = 0; k < numAirspace; k++) {
-                                AirspaceProfile airspace = flight.getAirspace(k);
-
-                                start = (dayOfSeason * MINUTE_PER_DAY + airspaceStart[k] - bufferDuration);
-                                end = (dayOfSeason * MINUTE_PER_DAY + airspaceEnd[k] + bufferDuration);
-
-                                addLocation(doc, airspace.getName(), start, end);
+                            for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
+                                    : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
+                                for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
+                                    addLocation(doc, locIntervals.getKey(), firstMinuteOfDay + interval.getLeft(), firstMinuteOfDay +interval.getRight());
+                                }
                             }
                         }
                     }
 
                 }
-                
-                    
-                    //if (flight.getCfn().equals("003") || flight.getCfn().equals("2203"))
+
+
+                //if (flight.getCfn().equals("003") || flight.getCfn().equals("2203"))
 
                 writer.addDocument(doc);
             }
@@ -249,20 +240,20 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
             IndexReader reader = IndexReader.open(dir);
             int[] uids = UIDField.load(reader, "_UID_");
-            
+
             phase.stop();
             mon.stop();        
-            
+
             System.out.printf("number of flights : %s\n", db.size());
             System.out.printf("number of schedules : %s\n", totalSchedules);
             System.out.printf("number of doc in index : %s\n", reader.numDocs());
-            
 
-//            Directory to = new NIOFSDirectory(new File("backup"));
-//            for (String file : dir.listAll()) {
-//                dir.copy(to, file, file); 
-//            }
-//            to.close();
+
+            Directory to = new NIOFSDirectory(new File("backup"));
+            for (String file : dir.listAll()) {
+                dir.copy(to, file, file); 
+            }
+            to.close();
 
             return new LuceneFlightSeason(reader, locations, periodDuration, uids, db.toArray(new Flight[db.size()]));
 
@@ -279,7 +270,27 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         return null;
     }
 
-  
+
+    private void add(MultiMap flightLocations, int airspaceStart, int airspaceEnd, String name) {
+        Collection<MutablePair<Integer, Integer>> locIntervals = (Collection<MutablePair<Integer, Integer>>) flightLocations.get(name);
+        if (locIntervals == null || locIntervals.isEmpty()) {
+            flightLocations.put(name, new MutablePair<Integer, Integer>(airspaceStart,airspaceEnd));
+        } else {
+            boolean done =  false;
+            for (MutablePair<Integer, Integer> interval : locIntervals) {
+                if (interval.getRight() >= airspaceStart) {
+                    interval.setRight(Math.max(interval.getRight(), airspaceEnd));
+                    done = true;
+                    break;
+                }
+            }
+            if (!done) {
+                flightLocations.put(name, new MutablePair<Integer, Integer>(airspaceStart,airspaceEnd));                                    
+            }
+        }
+    }
+
+
 
 
 
@@ -291,13 +302,19 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
         System.out.println(size);
     }
-    
-    private void addToWeekIndex(Document doc, String location, int start, int end) {
+
+    private void addToWeekIndex(Document doc, String location, int start, int end, int i) {
         int startInFirstPeriod = start % periodDuration;
         int endInLastPeriod = end % periodDuration;
 
         int firstPeriod = (start / periodDuration) % periodPerWeek;
         int lastPeriod = (end / periodDuration) % periodPerWeek;
+//
+//        if ((i == 2968) && location.equals("LGAVTMA")) {
+//            System.out.printf("i:%s;location:%s;startInFirstPeriod:%s;endInLastPeriod:%s;firstPeriod:%s;lastPeriod:%s\n",i, location, startInFirstPeriod, endInLastPeriod, firstPeriod, lastPeriod);
+//
+//        }
+
 
         Field field = new Field(weekFieldName(location, firstPeriod), weekFieldValue(startInFirstPeriod, 'a'), Store.NO,Index.ANALYZED_NO_NORMS);
         field.setIndexOptions(IndexOptions.DOCS_ONLY);
@@ -308,14 +325,27 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         field.setIndexOptions(IndexOptions.DOCS_ONLY);
 
         doc.add(field);
-        
-        if (firstPeriod != lastPeriod) {
+
+        if (firstPeriod < lastPeriod) {
             for (int k = firstPeriod + 1; k <= lastPeriod; k++) {
                 field = new Field(weekFieldName(location, k), "0", Store.NO,Index.ANALYZED_NO_NORMS);
                 field.setIndexOptions(IndexOptions.DOCS_ONLY);
-                
+
                 doc.add(field);
             }
+        } else if (firstPeriod > lastPeriod) {
+            for (int k = firstPeriod + 1; k <= 6; k++) {
+                field = new Field(weekFieldName(location, k), "0", Store.NO,Index.ANALYZED_NO_NORMS);
+                field.setIndexOptions(IndexOptions.DOCS_ONLY);
+
+                doc.add(field);
+            }            
+            for (int k = 0; k <= lastPeriod; k++) {
+                field = new Field(weekFieldName(location, k), "0", Store.NO,Index.ANALYZED_NO_NORMS);
+                field.setIndexOptions(IndexOptions.DOCS_ONLY);
+
+                doc.add(field);
+            }            
         }
     }
 
@@ -340,7 +370,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         final int firstPeriod = start / periodDuration;
         final int lastPeriod = end / periodDuration;
         final String seasonFieldName = location;
-        
+
         if (firstPeriod == lastPeriod) {
             Field field = new Field(seasonFieldName, false, NumericUtils.intToPrefixCoded(firstPeriod), Store.NO, Index.ANALYZED_NO_NORMS, TermVector.NO); 
             field.setIndexOptions(IndexOptions.DOCS_ONLY);
@@ -354,6 +384,6 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         }
     }
 
-  
+
 
 }

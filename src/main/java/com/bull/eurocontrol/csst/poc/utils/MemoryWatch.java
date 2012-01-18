@@ -33,7 +33,7 @@ public class MemoryWatch {
         return usedMemory;
     }
 
-    private static void gc() {
+    public static void gc() {
         try {
             System.gc();
             Thread.currentThread().sleep(100);

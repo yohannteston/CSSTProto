@@ -156,20 +156,27 @@ public class SVector<V>  {
             int k = 0;
             while (i != DocIdSetIterator.NO_MORE_DOCS && j != DocIdSetIterator.NO_MORE_DOCS) {
                 if (i == j) {
-                    newIndex[k] = i;
-                    newValue[k] = (V) combiner.combine((V)first.value[firstIndex.getCursor()], (V)rest.value[restIndex.getCursor()]);
+                    V r = (V) combiner.combine((V)first.value[firstIndex.getCursor()], (V)rest.value[restIndex.getCursor()]);
+                    if (r != null) {
+                        newIndex[k] = i;
+                        newValue[k] = r;
+                        k++;
+                    }
                     i = firstIndex.nextDoc();
                     j = restIndex.nextDoc();
                 } else if (i < j) {
                     newIndex[k] = i;
                     newValue[k] = (V) first.value[firstIndex.getCursor()];
+                    k++;
                     i = firstIndex.nextDoc();
                 } else {
                     newIndex[k] = j;
                     newValue[k] = (V) rest.value[restIndex.getCursor()];
+                    k++;
                     j = restIndex.nextDoc();
+                    
                 }
-                k++;
+                
             }
             
             if (i == DocIdSetIterator.NO_MORE_DOCS) {

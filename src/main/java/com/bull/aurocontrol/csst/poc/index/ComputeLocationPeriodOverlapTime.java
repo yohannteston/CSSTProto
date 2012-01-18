@@ -8,12 +8,14 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
 import it.unimi.dsi.fastutil.objects.ObjectSortedSet;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 
 import jsr166y.RecursiveTask;
 
 import org.apache.commons.collections.Closure;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.Term;
@@ -33,6 +35,7 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
     private int period;
     private LuceneFlightSeason index;
     private PeriodOfOperationCount flightGroupsCounter;
+    private boolean debug = false;
 
 
 
@@ -72,9 +75,14 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
     @Override
     protected SMatrix<Integer> compute() {
         final String prefix = "week_" + location + "_" + NumericUtils.intToPrefixCoded(period);
-//        System.out.println(location + " " + period + ": start");
         final IndexReader reader = index.getIndexReader();
-
+       
+        if (debug) {
+            
+            System.out.println(location + " " + period + ": start ->");
+            System.out.println("break");
+        }
+        
         int[] docBuffer = new int[reader.maxDoc()];
         int[] otherBuffer = new int[reader.maxDoc()];
         TermDocs termDocs = null;
@@ -133,8 +141,14 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
                     }
 
                 });
-//                System.out.println(location + " " + period + ": done ->");
-//                System.out.println(weekFlightPairCounters);
+                if (debug ) {
+                    System.out.println(location + " " + period + ": done ->");
+                    if ((period == 1) || period == 3) {
+                        if (debug) System.out.println(weekFlightPairCounters);
+                        
+                    }
+                    
+                }
                 return weekFlightPairCounters;
             }
 
@@ -152,7 +166,7 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
 
     private void processTsEntry(String tsKey, int[] docs, int[] tmpBuffer, final int n, Int2IntMap currentFlights, Int2ObjectSortedMap<Int2ObjectSortedMap<FlightPairCounter>> weekCounters) {
         if (tsKey.charAt(0) == '0') { // overlapping flights
-            //                        System.out.println(": overlapping  -> " + Arrays.toString(docs));
+            if (debug) System.out.println(": overlapping  -> " + Arrays.toString(ArrayUtils.subarray(docs,0,n)));
             addAll(docs, n, currentFlights, 0);
         } else {
             int len = tsKey.length();
@@ -160,11 +174,23 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
             int[] uids = index.getUIDS();
 
             if (tsKey.charAt(len-1) == 'a') { // arriving flights 
-                //                                System.out.println(": arr at " + ts + " -> " + Arrays.toString(docs));
+                if (debug) {
+                    System.out.println(": arr at " + ts + " -> " + Arrays.toString(ArrayUtils.subarray(docs,0,n)));
+                    System.out.println("before: " + currentFlights);
+                }
                 addAll(docs, n, currentFlights, ts);
+                if (debug) {
+                    System.out.println("after: " + currentFlights);
+                }
             } else { // leaving flights
-                //                                System.out.println(": rem at " + ts + " -> " + Arrays.toString(docs));
-
+                if (debug) {
+                    System.out.println(": rem at " + ts + " -> " + Arrays.toString(ArrayUtils.subarray(docs,0,n)));
+                    System.out.println("before: " + currentFlights);
+                }
+                for (int i = 0; i < n; i++) {
+                    tmpBuffer[i] = currentFlights.get(docs[i]);
+                }
+                
                 ObjectSortedSet<Entry> remaining = (ObjectSortedSet<Entry>)currentFlights.int2IntEntrySet();
                 Iterator<Entry> iterator = remaining.iterator();
                 int i = 0;
@@ -183,6 +209,9 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
                             if (uids[docj] != uids[doca]) row.put(doca, new FlightPairCounter(ts - Math.max(startj, starta)));                                
                         }                            
                     } else {
+                        if (docj != doci) {
+                            System.out.println("bug");
+                        }
                         assert docj == doci;
                         int starti = ej.getIntValue();
                         iterator.remove();
@@ -207,7 +236,10 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
                         }
                     }
                 }
-
+                if (debug) {
+                    System.out.println("after: " + currentFlights);
+                }
+                
 
             }
 
