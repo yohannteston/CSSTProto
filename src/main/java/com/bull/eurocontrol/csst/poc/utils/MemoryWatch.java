@@ -18,9 +18,11 @@ public class MemoryWatch {
     public String toString() {
         long totalUsed = stopMemory - startMemory;
         if (totalUsed < 1024 * 1024) {
-            return (totalUsed) + "KB";
-        } else {
+            return (totalUsed) + "B";
+        } else if (totalUsed < 1024 * 1024 * 1024) {
             return (totalUsed / 1024) + "KB";
+        } else {
+            return (totalUsed / 1024 / 1024) + "MB";
         }
     }
 

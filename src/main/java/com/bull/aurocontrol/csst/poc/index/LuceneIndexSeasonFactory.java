@@ -1,33 +1,20 @@
 package com.bull.aurocontrol.csst.poc.index;
 
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap.Entry;
-import it.unimi.dsi.fastutil.ints.Int2ObjectRBTreeMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.ints.IntList;
-
-import java.io.File;
 import java.io.IOException;
-import java.text.DecimalFormat;
-import java.text.NumberFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import jsr166y.ForkJoinPool;
+import jsr166y.RecursiveTask;
 
-import org.apache.commons.collections.MultiHashMap;
 import org.apache.commons.collections.MultiMap;
 import org.apache.commons.collections.map.MultiValueMap;
-import org.apache.commons.lang3.time.StopWatch;
-import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.lucene.analysis.KeywordAnalyzer;
@@ -41,9 +28,13 @@ import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.MatchAllDocsQuery;
+import org.apache.lucene.search.SearcherManager;
+import org.apache.lucene.search.SearcherWarmer;
+import org.apache.lucene.search.TotalHitCountCollector;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.LockObtainFailedException;
-import org.apache.lucene.store.NIOFSDirectory;
 import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.util.NumericUtils;
 import org.apache.lucene.util.Version;
@@ -55,41 +46,51 @@ import com.bull.aurocontrol.csst.poc.FlightProfile;
 import com.bull.aurocontrol.csst.poc.FlightSchedule;
 import com.bull.aurocontrol.csst.poc.FlightSeason;
 import com.bull.aurocontrol.csst.poc.FlightSeasonFactory;
+import com.bull.aurocontrol.csst.poc.index.interval.NumericIntervalField;
+import com.bull.eurocontrol.csst.poc.utils.MapReduceTask;
+import com.bull.eurocontrol.csst.poc.utils.MapReduceTask.AtomicTaskFactory;
+import com.bull.eurocontrol.csst.poc.utils.MapReduceTask.Merger;
+import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.jamonapi.Monitor;
 import com.jamonapi.MonitorFactory;
 
 public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
+    public static final String META_FLD_ADES = "ADES".intern();
+    public static final String META_FLD_ADEP = "ADEP".intern();
+    public static final String META_FLD_DOP = "D_OP".intern();
+    
     public static final int MINUTE_PER_DAY = 60 * 24;
     public static final int MINUTE_PER_WEEK = MINUTE_PER_DAY * 7;
     private int periodDuration;
     private int periodPerWeek;
+    private boolean buildMetadataIndex;
     private ForkJoinPool pool;
 
 
 
 
-    public LuceneIndexSeasonFactory(int periodPerDay) {
+    public LuceneIndexSeasonFactory(int periodPerDay, boolean buildMetadataIndex) {
         super();
         periodDuration = MINUTE_PER_DAY / periodPerDay;
         periodPerWeek = MINUTE_PER_WEEK / periodDuration;
+        this.buildMetadataIndex = buildMetadataIndex;
     }
 
 
     @Override
-    public FlightSeason buildFlightSeason(Iterator<Flight> source, int bufferDuration, ForkJoinPool pool) {
+    public FlightSeason buildFlightSeason(Iterator<Flight> source, final int bufferDuration, ForkJoinPool pool) {
         Monitor mon = MonitorFactory.start("index");
         Monitor phase = MonitorFactory.start("index/loading");
 
         long firstDayOfSeason = Long.MAX_VALUE;
-        long lastDayOfSeason = Long.MIN_VALUE;
 
         HashSet<String> locations = new HashSet<String>(); 
 
-        List<Flight> db = new ArrayList<Flight>();
+        List<Flight> dbL = new ArrayList<Flight>();
         while (source.hasNext()) {
             Flight flight = (Flight) source.next();
-            db.add(flight);
+            dbL.add(flight);
 
             locations.add(flight.getDepartureAirport());
             locations.add(flight.getDestinationAirport());
@@ -102,35 +103,72 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             if (firstDayOfSeason > fFirstDayOfOperation) {
                 firstDayOfSeason = fFirstDayOfOperation;
             }
-
-            final long fLastDayOfOperation = flight.getLastDayOfOperation();
-            if (lastDayOfSeason < fLastDayOfOperation) {
-                lastDayOfSeason = fLastDayOfOperation;
-            }
-
         }
+        
+        final Flight[] db = dbL.toArray(new Flight[dbL.size()]);
+        System.out.printf("number of flights : %s\n", db.length);
+
         phase.stop();        
         phase = MonitorFactory.start("index/lucene");
 
 
         try {   
-            Directory dir = preparePeriodLuceneIndex(bufferDuration, firstDayOfSeason, db);
-
-            IndexReader reader = IndexReader.open(dir);
+            Directory luceneDir = preparePeriodLuceneIndex(bufferDuration, firstDayOfSeason, db, 0, db.length);
+            
+            
+            IndexReader reader = IndexReader.open(luceneDir);
             int[] uids = UIDField.load(reader, "_UID_");
 
             phase.stop();
-            mon.stop();        
+
+            phase = MonitorFactory.startPrimary("index/overlaps");
+
+            SMatrix<Integer> overlaps = buildOverlapMatrix(pool, locations, db, reader, uids);
+            
+            System.out.println("overlaps:" + overlaps.size());
+
+            reader.close();
+            reader = null;
+            luceneDir = null;
+            
+            
+            phase.stop();
+
+            SearcherManager searcherManager = null;
+            if (buildMetadataIndex) {
+                phase = MonitorFactory.startPrimary("index/metadata");
+
+                luceneDir = prepareMetaLuceneIndex(db);            
+               
+                searcherManager = new SearcherManager(luceneDir, new SearcherWarmer(){
+
+                    @Override
+                    public void warm(IndexSearcher s) throws IOException {
+                       s.search(new MatchAllDocsQuery(), new TotalHitCountCollector());                        
+                    }
+                    
+                }, pool);
+
+                IndexSearcher indexSearcher = searcherManager.acquire();
+                uids = UIDField.load(indexSearcher.getIndexReader(), "_UID_");
+                searcherManager.release(indexSearcher);
+                indexSearcher = null;
+                
+                phase.stop();
+            }
+            
+            mon.stop();
 
 
+            //            Directory to = new NIOFSDirectory(new File("backup"));
+            //            for (String file : dir.listAll()) {
+            //                dir.copy(to, file, file); 
+            //            }
+            //            to.close();
 
-//            Directory to = new NIOFSDirectory(new File("backup"));
-//            for (String file : dir.listAll()) {
-//                dir.copy(to, file, file); 
-//            }
-//            to.close();
-
-            return new LuceneFlightSeason(reader, locations, periodDuration, uids, db.toArray(new Flight[db.size()]));
+            LuceneIndexFlightSeason luceneIndexFlightSeason = new LuceneIndexFlightSeason(overlaps,db,searcherManager,uids );
+            if (this.buildMetadataIndex) luceneIndexFlightSeason.buildConflictMatrix();
+            return luceneIndexFlightSeason;
 
         } catch (CorruptIndexException e) {
             // TODO Auto-generated catch block
@@ -146,8 +184,28 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
     }
 
 
-    private Directory preparePeriodLuceneIndex(int bufferDuration, long firstDayOfSeason, List<Flight> db) throws CorruptIndexException,
-            LockObtainFailedException, IOException {
+    private SMatrix<Integer> buildOverlapMatrix(ForkJoinPool pool, HashSet<String> locations, Flight[] db, IndexReader reader, int[] uids) {
+        String[] items = locations.toArray(new String[locations.size()]);
+        Merger<SMatrix<Integer>> merger = new IntMatrixAdder();
+        AtomicTaskFactory<String, SMatrix<Integer>, OverlapProcessParameters> factory = new AtomicTaskFactory<String, SMatrix<Integer>, OverlapProcessParameters>() {
+
+            @Override
+            public RecursiveTask<SMatrix<Integer>> create(String item, int index, OverlapProcessParameters parameters) {
+                return new ComputeLocationOverlapTime(item, parameters);
+            }
+        };
+        OverlapProcessParameters luceneFlightSeason = new OverlapProcessParameters(reader, locations, periodDuration, uids, db);
+
+        MapReduceTask<String, SMatrix<Integer>, OverlapProcessParameters> task = new MapReduceTask<String, SMatrix<Integer>, OverlapProcessParameters>(items, luceneFlightSeason, merger, factory);
+
+        SMatrix<Integer> overlaps = pool.submit(task).join();
+
+        return overlaps;
+    }
+
+
+    private Directory preparePeriodLuceneIndex(int bufferDuration, long firstDayOfSeason, Flight[] db, int from, int to) throws CorruptIndexException,
+    LockObtainFailedException, IOException {
         int totalSchedules = 0;
         DayOfWeek dowOfFirstDayOfSeason = DayOfWeek.get(firstDayOfSeason);
 
@@ -156,8 +214,8 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         config.setRAMBufferSizeMB(256);
 
         IndexWriter writer = new IndexWriter(dir,config);
-        for (int i = 0, endi = db.size(); i < endi; i++) {
-            Flight flight = db.get(i);
+        for (int i = from; i < to; i++) {
+            Flight flight = db[i];
 
             FlightSchedule[] schedules = flight.getSchedules();
             final int numSched = schedules.length;
@@ -168,11 +226,11 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             doc.add(new UIDField("_UID_", i));
 
             MultiMap flightLocations = prepareLocationIntervals(bufferDuration, flight);
-            
-//                if (i == 2968) {
-//                    System.out.println(flight);
-//                    System.out.println(flightLocations);
-//                }
+
+            //                if (i == 2968) {
+            //                    System.out.println(flight);
+            //                    System.out.println(flightLocations);
+            //                }
 
 
             // add values for the week index
@@ -190,11 +248,45 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
         writer.commit();
         writer.close();
-        System.out.printf("number of flights : %s\n", db.size());
         System.out.printf("number of schedules : %s\n", totalSchedules);
         return dir;
     }
 
+    private Directory prepareMetaLuceneIndex(Flight[] db) throws CorruptIndexException,
+    LockObtainFailedException, IOException {
+
+        Directory dir = new RAMDirectory();
+        IndexWriterConfig config = new IndexWriterConfig(Version.LUCENE_35, new KeywordAnalyzer());
+        config.setRAMBufferSizeMB(256);
+
+        IndexWriter writer = new IndexWriter(dir,config);
+        for (int i = 0, endi = db.length; i < endi; i++) {
+            Flight flight = db[i];
+
+
+            Document doc = new Document();
+            doc.add(new UIDField("_UID_", i));
+            addBMField(doc, META_FLD_ADEP, flight.getDepartureAirport());
+            addBMField(doc, META_FLD_ADES, flight.getDestinationAirport());
+            
+            for (FlightSchedule schedule : flight.getSchedules()) {
+                doc.add(new NumericIntervalField(META_FLD_DOP, true, schedule.getFirstDayOfOperation(), schedule.getLastDayOfOperation()));
+            }
+            
+            writer.addDocument(doc);
+        }
+
+        writer.commit();
+        writer.close();
+        return dir;
+    }
+
+
+    private void addBMField(Document doc, String field, String value) {
+        Field f = new Field(field, value, Store.NO,Index.ANALYZED_NO_NORMS);
+        f.setIndexOptions(IndexOptions.DOCS_ONLY);
+        doc.add(f);
+    }
 
     private MultiMap prepareLocationIntervals(int bufferDuration, Flight flight) {
         int eobt = flight.getEobt();
@@ -202,7 +294,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
 
         MultiMap flightLocations = new MultiValueMap();
-        
+
         int numAirspace = flight.countAirspace();
 
         // profiling flight
@@ -220,13 +312,13 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             } else {
                 for (int k = 0; k < numAirspace; k++) {
                     AirspaceProfile airspace = flight.getAirspace(k);
-                    
+
                     int airspaceStart  = etot + airspace.getStart() * duration / profile.getDuration() - bufferDuration;
                     int airspaceEnd = etot + airspace.getEnd() * duration / profile.getDuration() + bufferDuration;
                     String name = airspace.getName();
-                    
+
                     add(flightLocations, airspaceStart, airspaceEnd, name);
-                    
+
                 }                    
 
             }
@@ -247,12 +339,12 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             FlightSchedule sched = schedules[schedI];
             dowIndexed.addAll(sched.getDaysOfOperation());
         }
-        
-        
+
+
         for (DayOfWeek dayOfWeek : dowIndexed) {
             int dayOrd = (dayOfWeek.ordinal() - dowOfFirstDayOfSeason.ordinal() + 7) % 7; 
             int firstMinuteOfDay = dayOrd * MINUTE_PER_DAY;
-            
+
             for (Map.Entry<String, Collection<Pair<Integer,Integer>>> locIntervals 
                     : (Collection<Map.Entry<String, Collection<Pair<Integer,Integer>>>>)flightLocations.entrySet()) {
                 for (Pair<Integer,Integer> interval : locIntervals.getValue()) {
@@ -333,11 +425,11 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
         int firstPeriod = (start / periodDuration) % periodPerWeek;
         int lastPeriod = (end / periodDuration) % periodPerWeek;
-//
-//        if ((i == 2968) && location.equals("LGAVTMA")) {
-//            System.out.printf("i:%s;location:%s;startInFirstPeriod:%s;endInLastPeriod:%s;firstPeriod:%s;lastPeriod:%s\n",i, location, startInFirstPeriod, endInLastPeriod, firstPeriod, lastPeriod);
-//
-//        }
+        //
+        //        if ((i == 2968) && location.equals("LGAVTMA")) {
+        //            System.out.printf("i:%s;location:%s;startInFirstPeriod:%s;endInLastPeriod:%s;firstPeriod:%s;lastPeriod:%s\n",i, location, startInFirstPeriod, endInLastPeriod, firstPeriod, lastPeriod);
+        //
+        //        }
 
 
         Field field = new Field(weekFieldName(location, firstPeriod), weekFieldValue(startInFirstPeriod, 'a'), Store.NO,Index.ANALYZED_NO_NORMS);

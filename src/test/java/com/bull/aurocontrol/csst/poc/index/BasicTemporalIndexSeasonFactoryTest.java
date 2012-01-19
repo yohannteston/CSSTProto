@@ -3,6 +3,7 @@ package com.bull.aurocontrol.csst.poc.index;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 
@@ -14,6 +15,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.bull.aurocontrol.csst.poc.ConflictQuery;
 import com.bull.aurocontrol.csst.poc.Flight;
 import com.bull.aurocontrol.csst.poc.FlightPairData;
 import com.bull.aurocontrol.csst.poc.FlightSeason;
@@ -24,6 +26,7 @@ import com.bull.eurocontrol.csst.poc.source.CSVFlightSourceFactory;
 import com.bull.eurocontrol.csst.poc.utils.Combiner;
 import com.bull.eurocontrol.csst.poc.utils.IJClosure;
 import com.bull.eurocontrol.csst.poc.utils.IJTransformer;
+import com.bull.eurocontrol.csst.poc.utils.JamonUtils;
 import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.jamonapi.Monitor;
 import com.jamonapi.MonitorFactory;
@@ -44,23 +47,23 @@ public class BasicTemporalIndexSeasonFactoryTest {
         ForkJoinPool pool = new ForkJoinPool(1);
         CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("Results/test-flights.csv"), new File("Results/catalog.csv"));
 
-        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(1);
+        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(1, false);
 
         Iterator<Flight> source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25, pool);
+        final LuceneIndexFlightSeason season =  (LuceneIndexFlightSeason) factory.buildFlightSeason(source, 25, pool);
 
         
-        SMatrix<Integer> overlaps1 = season.queryOverlaps(1);
+        SMatrix<Integer> overlaps1 = season.getOverlapMatrix();
         
-        factory = new LuceneIndexSeasonFactory(2);
+        factory = new LuceneIndexSeasonFactory(2,false);
 
         source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season2 =  (LuceneFlightSeason) factory.buildFlightSeason(source, 25, pool);
+        final LuceneIndexFlightSeason season2 =  (LuceneIndexFlightSeason) factory.buildFlightSeason(source, 25, pool);
 
         
-        SMatrix<Integer> overlaps2 = season2.queryOverlaps(1);
+        SMatrix<Integer> overlaps2 = season2.getOverlapMatrix();
         
         SMatrix<Integer> deltas = SMatrix.combine(overlaps1, overlaps2, new Combiner<Integer>() {
 
@@ -90,5 +93,34 @@ public class BasicTemporalIndexSeasonFactoryTest {
         System.out.println(deltas.size());
     }
 
+    @Test
+    public void testQuery() throws IOException {
+        ForkJoinPool pool = new ForkJoinPool(1);
+        CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(new File("Results/test-flights.csv"), new File("Results/catalog.csv"));
+
+        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(1, true);
+
+        Iterator<Flight> source = sourceFactory.iterate();
+
+        final LuceneIndexFlightSeason season =  (LuceneIndexFlightSeason) factory.buildFlightSeason(source, 25, pool);
+
+        testQuery(season, new ConflictQuery(null, null, null, null, 0));
+        testQuery(season, new ConflictQuery(null, null, null, null, 2));
+        testQuery(season, new ConflictQuery("LEMD", null, null, null, 0));
+        testQuery(season, new ConflictQuery("LEMD", null, new Date(1301184000000L), new Date(1306627200000L), 0));
+        testQuery(season, new ConflictQuery("LEMD", null, new Date(1301184000000L), new Date(1306627200000L), 2));
+        
+        JamonUtils.outputJamonReport(null);
+        
+    }
+
+    private void testQuery(final LuceneIndexFlightSeason season, ConflictQuery q) throws IOException {
+        Monitor mon = MonitorFactory.start("query");
+        
+        SMatrix<FlightPairData> result = season.queryConflicts(q);
+        System.out.println(result.size());
+        
+        mon.stop();
+    }
 
 }

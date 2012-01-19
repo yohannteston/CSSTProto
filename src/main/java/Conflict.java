@@ -39,7 +39,8 @@ import com.bull.aurocontrol.csst.poc.DayOfWeek;
 import com.bull.aurocontrol.csst.poc.Flight;
 import com.bull.aurocontrol.csst.poc.FlightPairData;
 import com.bull.aurocontrol.csst.poc.FlightSchedule;
-import com.bull.aurocontrol.csst.poc.index.LuceneFlightSeason;
+import com.bull.aurocontrol.csst.poc.FlightSeason;
+import com.bull.aurocontrol.csst.poc.index.OverlapProcessParameters;
 import com.bull.aurocontrol.csst.poc.index.LuceneIndexSeasonFactory;
 import com.bull.aurocontrol.csst.poc.index.rules.AnagramsRule;
 import com.bull.aurocontrol.csst.poc.index.rules.IdenticalFinalDigitsRule;
@@ -47,6 +48,7 @@ import com.bull.aurocontrol.csst.poc.index.rules.ParallelCharactersRule;
 import com.bull.eurocontrol.csst.poc.source.CSVFlightSourceFactory;
 import com.bull.eurocontrol.csst.poc.utils.IJClosure;
 import com.bull.eurocontrol.csst.poc.utils.IJTransformer;
+import com.bull.eurocontrol.csst.poc.utils.JamonUtils;
 import com.bull.eurocontrol.csst.poc.utils.MemoryWatch;
 import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.jamonapi.Monitor;
@@ -108,32 +110,7 @@ public class Conflict {
             }
             
 
-            String[] header = MonitorFactory.getComposite("ms.").getDisplayHeader();
-            Object[][] data = MonitorFactory.getComposite("ms.").getDisplayData();
-            
-            Arrays.sort(data, new Comparator<Object[]>() {
-
-                @Override
-                public int compare(Object[] o1, Object[] o2) {
-                    return ((String)o1[0]).compareTo((String)o2[0]);
-                }
-                
-            });
-            
-            BufferedWriter jamonWriter;
-            if (jamon != null) {
-                jamonWriter = new BufferedWriter(new FileWriter(jamon,false));
-            } else {
-                jamonWriter = new BufferedWriter(new OutputStreamWriter(System.out));
-            }
-
-            jamonWriter.write(StringUtils.join(header,'\t'));
-            jamonWriter.newLine();
-            for (int i = 0; i < data.length; i++) {
-                jamonWriter.write(StringUtils.join(data[i],'\t'));
-                jamonWriter.newLine();
-            }
-            jamonWriter.flush();
+            JamonUtils.outputJamonReport(jamon);
             
 //            System.out.println("comparing");
 //            
@@ -170,7 +147,7 @@ public class Conflict {
 //                report.append(++x + " " +line + "\n");
 //            }
 //            report.close();
-            jamonWriter.close();
+            
 
         } catch (Exception e) {
             printHelp(options);
@@ -178,53 +155,22 @@ public class Conflict {
         }
     }
 
+ 
     private static void doTest(File input, File catalog, File conflicts, int threads, int periods, final int buffer, ForkJoinPool pool) throws IOException {
         Monitor global = MonitorFactory.startPrimary("_TOTAL_");
 
         CSVFlightSourceFactory sourceFactory = new CSVFlightSourceFactory(input, catalog);
 
-        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(periods);
+        LuceneIndexSeasonFactory factory = new LuceneIndexSeasonFactory(periods, false);
 
         Iterator<Flight> source = sourceFactory.iterate();
 
-        final LuceneFlightSeason season =  (LuceneFlightSeason) factory.buildFlightSeason(source, buffer, pool);
+        final FlightSeason season =   factory.buildFlightSeason(source, buffer, pool);
          
-        SMatrix<Integer> overlapMatrix = season.queryOverlaps(threads);
-        //System.out.println(overlapMatrix);
-        System.out.println("overlaps:" + overlapMatrix.size());
-        
         
         Monitor phase = MonitorFactory.start("rule_check");
-        
-        final AnagramsRule anagramsRule = new AnagramsRule();
-        final IdenticalFinalDigitsRule digitsRule = new IdenticalFinalDigitsRule();
-        final ParallelCharactersRule parallelCharactersRule = new ParallelCharactersRule();
-                    
-        
-        
-        SMatrix<FlightPairData> conflictMatrix = overlapMatrix.transform(new IJTransformer<Integer,FlightPairData>() {
-
-            @Override
-            public FlightPairData transform(int i, int j, Integer val) {
-                Flight fi = season.getFlight(i);
-                Flight fj = season.getFlight(j);
-
-                Integer duration = (Integer) val;
-                
-                FlightPairData result = new FlightPairData(fi,fj,duration.intValue());
-                
-                result.setAnagram(!anagramsRule.check(fi, fj));
-                result.setIdenticalDigits(!digitsRule.check(fi, fj));
-                result.setParallelCharacters(!parallelCharactersRule.check(fi, fj));
-                
-                if (result.isAnagram() || result.isIdenticalDigits() || result.isParallelCharacters()) {
-                    return result;
-                } else {
-                    return null;
-                }
-            }
-            
-        });
+        SMatrix<FlightPairData> conflictMatrix = season.queryConflicts();
+        //System.out.println(overlapMatrix);
         
         System.out.println("conflicting flights index entries:" + conflictMatrix.size());
         

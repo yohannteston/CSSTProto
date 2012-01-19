@@ -6,6 +6,7 @@ import javax.sql.rowset.Predicate;
 import org.apache.commons.collections.Closure;
 import org.apache.commons.collections.Transformer;
 import org.apache.commons.lang3.mutable.MutableInt;
+import org.apache.lucene.search.DocIdSet;
 
 import com.kamikaze.docidset.api.DocSet;
 
@@ -32,8 +33,12 @@ public class SMatrix<V>   {
         this.tree = newTree;
     }
 
-    public void executeOnEachRow(DocSet set, Closure closure) {
+    public void executeOnEachRow(DocSet set, IClosure<SVector<V>> closure) {
         tree.executeOnEachItem(set, closure);        
+    }
+    public <T> SMatrix<T> transformEachRow(DocIdSet set, ITransformer<SVector<V>, SVector<T>> transformer) {
+        SVector<SVector<T>> newTree = tree.transform(set, transformer, false);    
+        return new SMatrix<T>(newTree);
     }
     
 

@@ -10,17 +10,12 @@ import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 
 public interface FlightSeason {
 
-    public abstract long indexSize();
+    SMatrix<FlightPairData> queryConflicts() throws IOException;
 
-    public abstract int getDuration();
+    SMatrix<FlightPairData> queryConflicts(ConflictQuery query) throws IOException;
 
-    public abstract Date getLastDayOfSeason();
-
-    public abstract Date getFirstDayOfSeason();
-
-    public abstract int getNumberOfFlights();
-
-
-    SMatrix<Integer> queryOverlaps(int paralellism) throws IOException;
+    Flight getFlight(int i);
+    
+    
 
 }

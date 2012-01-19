@@ -5,6 +5,7 @@ import it.unimi.dsi.fastutil.ints.Int2IntMap.Entry;
 import it.unimi.dsi.fastutil.ints.Int2IntRBTreeMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectRBTreeMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectSortedMap;
+import it.unimi.dsi.fastutil.ints.IntArrays;
 import it.unimi.dsi.fastutil.objects.ObjectSortedSet;
 
 import java.io.IOException;
@@ -25,6 +26,7 @@ import org.apache.lucene.util.NumericUtils;
 
 import com.bull.aurocontrol.csst.poc.index.ComputeLocationOverlapTime.PeriodOfOperationCount;
 import com.bull.eurocontrol.csst.poc.utils.Closeables;
+import com.bull.eurocontrol.csst.poc.utils.IClosure;
 import com.bull.eurocontrol.csst.poc.utils.IJTransformer;
 import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.bull.eurocontrol.csst.poc.utils.SVector;
@@ -33,13 +35,13 @@ import com.kamikaze.docidset.api.DocSet;
 public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Integer>> {
     private String location;
     private int period;
-    private LuceneFlightSeason index;
+    private OverlapProcessParameters index;
     private PeriodOfOperationCount flightGroupsCounter;
     private boolean debug = false;
 
 
 
-    public ComputeLocationPeriodOverlapTime(String location, LuceneFlightSeason index, PeriodOfOperationCount flightGroupsCounter) {
+    public ComputeLocationPeriodOverlapTime(String location, OverlapProcessParameters index, PeriodOfOperationCount flightGroupsCounter) {
         super();
         this.location = location;
         this.period = flightGroupsCounter.getPeriod();
@@ -85,6 +87,7 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
         
         int[] docBuffer = new int[reader.maxDoc()];
         int[] otherBuffer = new int[reader.maxDoc()];
+        int[] uids = index.getUIDS(); 
         TermDocs termDocs = null;
         TermEnum weeksPeriods = null;
         try {
@@ -104,7 +107,12 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
                 // load posting list
                 termDocs.seek(weeksPeriods);
                 int n = termDocs.read(docBuffer, otherBuffer);
-
+                // map to uids
+                for (int i = 0; i < n; i++) {
+                    docBuffer[i] = uids[docBuffer[i]];
+                }
+                IntArrays.quickSort(docBuffer, 0, n);
+                
                 // process posting list
                 processTsEntry(tsKey, docBuffer, otherBuffer, n, periodFlights, periodFlightPairCounters);
 
@@ -293,16 +301,14 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
         final DocSet set = c.getKey();
         final int count = c.getValue().intValue();
 
-        compressed.executeOnEachRow(set, new Closure() {
+        compressed.executeOnEachRow(set, new IClosure<SVector<FlightPairCounter>>() {
 
             @Override
-            public void execute(Object input) {
-                SVector<FlightPairCounter> row = (SVector<FlightPairCounter>) input;
-                row.executeOnEachItem(set, new Closure() {
+            public void execute(int i, SVector<FlightPairCounter> row) {
+                row.executeOnEachItem(set, new IClosure<FlightPairCounter>() {
 
                     @Override
-                    public void execute(Object input) {
-                        FlightPairCounter c = (FlightPairCounter) input;
+                    public void execute(int i, FlightPairCounter c) {
                         c.numberOfPeriodInSeason += count; 
                     }
 

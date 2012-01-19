@@ -2,41 +2,50 @@ package com.bull.aurocontrol.csst.poc.index;
 
 
 
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.IntArrays;
+import it.unimi.dsi.fastutil.ints.IntIterator;
+import it.unimi.dsi.fastutil.ints.IntRBTreeSet;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenCustomHashMap;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.Map;
 
+import jsr166y.RecursiveTask;
+
+import org.apache.commons.collections.map.IdentityMap;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.TermDocs;
 import org.apache.lucene.index.TermEnum;
+import org.apache.lucene.search.DocIdSet;
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.util.NumericUtils;
 
 import com.bull.eurocontrol.csst.poc.utils.Closeables;
 import com.bull.eurocontrol.csst.poc.utils.MapReduceTask;
-import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.bull.eurocontrol.csst.poc.utils.MapReduceTask.AtomicTaskFactory;
 import com.bull.eurocontrol.csst.poc.utils.MapReduceTask.Merger;
+import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.kamikaze.docidset.api.DocSet;
+import com.kamikaze.docidset.impl.ImmutableIntArrayDocIdSet;
 import com.kamikaze.docidset.impl.IntArrayDocIdSet;
-
-
-import jsr166y.RecursiveTask;
+import com.kamikaze.docidset.utils.DocSetFactory;
+import com.kamikaze.docidset.utils.IntArray;
 
 public class ComputeLocationOverlapTime extends RecursiveTask<SMatrix<Integer>> {
     private String location;
 
-    private LuceneFlightSeason index;
+    private OverlapProcessParameters index;
 
     
     
     
     
-    public ComputeLocationOverlapTime(String location, LuceneFlightSeason index) {
+    public ComputeLocationOverlapTime(String location, OverlapProcessParameters index) {
         super();
         this.location = location;
         this.index = index;
@@ -53,7 +62,10 @@ public class ComputeLocationOverlapTime extends RecursiveTask<SMatrix<Integer>> 
         ArrayList<PeriodOfOperationCount> nonNulls = new ArrayList<ComputeLocationOverlapTime.PeriodOfOperationCount>();
         for (int i = 0; i < flightGroupsCounters.length; i++) {
             PeriodOfOperationCount e = flightGroupsCounters[i];
-            if (e != null) nonNulls.add(e);
+            if (e != null) {
+                e.convertToUIDs(index.getUIDS());
+                nonNulls.add(e);
+            }
         }
         
         if (nonNulls.size() == 0) return null;
@@ -61,17 +73,17 @@ public class ComputeLocationOverlapTime extends RecursiveTask<SMatrix<Integer>> 
         flightGroupsCounters = nonNulls.toArray(new PeriodOfOperationCount[nonNulls.size()]);
         
         
-        Merger<SMatrix<Integer>> merger = new MutableIntMatrixAdder();
-        AtomicTaskFactory<PeriodOfOperationCount, SMatrix<Integer>, LuceneFlightSeason> atomicTaskFactory = new AtomicTaskFactory<PeriodOfOperationCount, SMatrix<Integer>, LuceneFlightSeason>() {
+        Merger<SMatrix<Integer>> merger = new IntMatrixAdder();
+        AtomicTaskFactory<PeriodOfOperationCount, SMatrix<Integer>, OverlapProcessParameters> atomicTaskFactory = new AtomicTaskFactory<PeriodOfOperationCount, SMatrix<Integer>, OverlapProcessParameters>() {
 
             @Override
-            public RecursiveTask<SMatrix<Integer>> create(PeriodOfOperationCount item, int index, LuceneFlightSeason parameters) {
+            public RecursiveTask<SMatrix<Integer>> create(PeriodOfOperationCount item, int index, OverlapProcessParameters parameters) {
                 return new ComputeLocationPeriodOverlapTime(location, parameters, item);
             }
         };
         
-        MapReduceTask<PeriodOfOperationCount, SMatrix<Integer>, LuceneFlightSeason> mrTask;
-        mrTask = new MapReduceTask<PeriodOfOperationCount, SMatrix<Integer>, LuceneFlightSeason>(flightGroupsCounters, index, merger, atomicTaskFactory);
+        MapReduceTask<PeriodOfOperationCount, SMatrix<Integer>, OverlapProcessParameters> mrTask;
+        mrTask = new MapReduceTask<PeriodOfOperationCount, SMatrix<Integer>, OverlapProcessParameters>(flightGroupsCounters, index, merger, atomicTaskFactory);
         
         return mrTask.invoke();
     }
@@ -83,6 +95,31 @@ public class ComputeLocationOverlapTime extends RecursiveTask<SMatrix<Integer>> 
         private PeriodOfOperationCount(int period) {
             super();
             this.period = period;
+        }
+
+        public void convertToUIDs(int[] uids) {
+            Map<DocSet, MutableInt> newCounts = new IdentityHashMap<DocSet, MutableInt>(counts.size());
+            
+            try {
+                for (Map.Entry<DocSet, MutableInt> e : counts.entrySet()) {
+                      
+                    IntRBTreeSet nDocSet = new IntRBTreeSet();
+                    int i = 0;
+                    DocIdSetIterator it = e.getKey().iterator();
+                    
+                    for (int doc = it.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = it.nextDoc(), i++) {
+                        nDocSet.add(uids[doc]);
+                    }
+                    DocSet set = new IntArrayDocIdSet(nDocSet.size());
+                    for (IntIterator iterator = nDocSet.iterator(); iterator.hasNext();) {
+                        set.addDoc(iterator.nextInt());                        
+                    }
+                    newCounts.put(set, e.getValue());
+                }
+            } catch (IOException e1) {
+                throw new RuntimeException(e1);
+            }
+            this.counts = newCounts;
         }
 
         public int getPeriod() {
