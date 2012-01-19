@@ -1,9 +1,12 @@
 package com.bull.aurocontrol.csst.poc.index;
 
+import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectAVLTreeMap;
 
 import java.io.IOException;
+import java.util.ArrayList;
 
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.FactoryUtils;
 import org.apache.commons.collections.Transformer;
 import org.apache.commons.lang3.mutable.MutableInt;
@@ -23,37 +26,45 @@ import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.OpenBitSet;
 
 import com.bull.aurocontrol.csst.poc.ConflictQuery;
+import com.bull.aurocontrol.csst.poc.DayOfWeek;
 import com.bull.aurocontrol.csst.poc.Flight;
 import com.bull.aurocontrol.csst.poc.FlightPairData;
+import com.bull.aurocontrol.csst.poc.FlightSchedule;
 import com.bull.aurocontrol.csst.poc.FlightSeason;
 import com.bull.aurocontrol.csst.poc.index.interval.NumericIntervalIntersectionQuery;
 import com.bull.aurocontrol.csst.poc.index.rules.AnagramsRule;
 import com.bull.aurocontrol.csst.poc.index.rules.IdenticalFinalDigitsRule;
 import com.bull.aurocontrol.csst.poc.index.rules.ParallelCharactersRule;
+import com.bull.eurocontrol.csst.poc.utils.Combiner;
 import com.bull.eurocontrol.csst.poc.utils.IClosure;
 import com.bull.eurocontrol.csst.poc.utils.IJTransformer;
 import com.bull.eurocontrol.csst.poc.utils.ITransformer;
+import com.bull.eurocontrol.csst.poc.utils.ITransformerUtils;
 import com.bull.eurocontrol.csst.poc.utils.SMatrix;
 import com.bull.eurocontrol.csst.poc.utils.SVector;
 import com.kamikaze.docidset.api.DocSet;
+import com.kamikaze.docidset.impl.NotDocIdSet;
 import com.kamikaze.docidset.utils.DocSetFactory;
 import com.kamikaze.docidset.utils.DocSetFactory.FOCUS;
 
 public class LuceneIndexFlightSeason implements FlightSeason {
 
+    private static final int MINUTE_PER_DAY = 60*24;
     private SMatrix<Integer> overlaps;
     private Flight[] db;
     private SearcherManager searcherManager;
     private int[] uids;
     private SMatrix<FlightPairData> conflictMatrix;
     private SVector<Integer> conflictCounters;
+    private int buffer;
 
-    public LuceneIndexFlightSeason(SMatrix<Integer> overlaps, Flight[] db, SearcherManager searcherManager, int[] uids) {
+    public LuceneIndexFlightSeason(SMatrix<Integer> overlaps, Flight[] db, SearcherManager searcherManager, int[] uids, int buffer) {
         super();
         this.overlaps = overlaps;
         this.db = db;
         this.searcherManager = searcherManager;
         this.uids = uids;
+        this.buffer = buffer;
     }
 
     @Override
@@ -85,13 +96,52 @@ public class LuceneIndexFlightSeason implements FlightSeason {
                     result.setIdenticalDigits(!digitsRule.check(fi, fj));
                     result.setParallelCharacters(!parallelCharactersRule.check(fi, fj));
 
+                    ArrayList<short[]> conflictingSchedules = new ArrayList<short[]>();
+                    
                     if (result.isAnagram() || result.isIdenticalDigits() || result.isParallelCharacters()) {
+                        FlightSchedule[] fsi = fi.getSchedules();
+                        FlightSchedule[] fsj = fj.getSchedules();
+                        int conflictingSchedule = 0;
+                        for (int k = 0; k < fsi.length; k++) {
+                            FlightSchedule si = fsi[k];
+                            for (int l = 0; l < fsj.length; l++) {
+                                FlightSchedule sj = fsj[l];
+                                
+                                if (si.getFirstDayOfOperation() <= sj.getLastDayOfOperation() 
+                                        && si.getLastDayOfOperation() >= sj.getFirstDayOfOperation()) {
+                                    int eobt1 = fi.getEobt() - buffer;
+                                    int eta1 = fi.getEta() + buffer;
+                                    int eobt2 = fj.getEobt() - buffer;
+                                    int eta2 = fj.getEta() + buffer;
+                                    
+                                    if (eobt1 <= eta2 && eta1 >= eobt2 
+                                            && CollectionUtils.containsAny(si.getDaysOfOperation(), sj.getDaysOfOperation())) {
+                                        conflictingSchedule++;
+                                        conflictingSchedules.add(new short[] {(short) k,(short) l});
+                                    } else if (eobt1 <= eta2 - MINUTE_PER_DAY && eta1 >= eobt2 - MINUTE_PER_DAY) { // 2 overlap if running previous day
+                                        for (DayOfWeek r : sj.getDaysOfOperation()) {
+                                            if (si.getDaysOfOperation().contains(r.next())) {
+                                                conflictingSchedule++;
+                                                conflictingSchedules.add(new short[] {(short) k,(short) l});
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                }
+                            }
+                        }
+
+                        
                         MutableInt c = counters.get(i);
                         if (c == null) {
-                            counters.put(i, new MutableInt(1));
+                            counters.put(i, new MutableInt(conflictingSchedule));
                         } else {
-                            c.increment();
+                            c.add(conflictingSchedule);
                         }
+                        
+                        result.setConflictingSchedules(conflictingSchedules.toArray(new short[conflictingSchedules.size()][]));
+                        
                         return result;
                     } else {
                         return null;
@@ -117,6 +167,7 @@ public class LuceneIndexFlightSeason implements FlightSeason {
 
     public class DocSetCollector extends Collector {
         private int size = 0;
+        private int maxValue = -1;
         private final OpenBitSet docIdSet;
 
         private int base;
@@ -136,7 +187,9 @@ public class LuceneIndexFlightSeason implements FlightSeason {
 
         @Override
         public void collect(int doc) throws IOException {
-            docIdSet.set(uids[base + doc]);
+            int index = uids[base + doc];
+            if (maxValue < index) maxValue = index;
+            docIdSet.set(index);
             size++;
         }
 
@@ -159,6 +212,7 @@ public class LuceneIndexFlightSeason implements FlightSeason {
     public SMatrix<FlightPairData> queryConflicts(final ConflictQuery query) throws IOException {
         DocIdSet flightsConcerned;
         int size = 0;
+        int maxIndex;
         buildConflictMatrix();
 
         IndexSearcher searcher = searcherManager.acquire();
@@ -177,6 +231,7 @@ public class LuceneIndexFlightSeason implements FlightSeason {
 
             flightsConcerned = results.docIdSet();
             size = results.getSize();
+            maxIndex = results.maxValue;
         } finally {
             searcherManager.release(searcher);
 
@@ -188,18 +243,18 @@ public class LuceneIndexFlightSeason implements FlightSeason {
         if (size == 0) return null;
 
         if (query.getMinimumConflicts() > 1) {
-            flightsConcerned = filterByConflictCount(query, flightsConcerned, size);
+            flightsConcerned = filterByConflictCount(query, flightsConcerned, size, maxIndex);
         }
 
         if (size == 0) return null;
 
-        final SMatrix<FlightPairData> conflictMatrix = filterConflicts(flightsConcerned);
+        final SMatrix<FlightPairData> conflictMatrix = filterConflicts(flightsConcerned, maxIndex);
 
         return conflictMatrix;
     }
 
-    private DocIdSet filterByConflictCount(final ConflictQuery query, DocIdSet flightsConcerned, int size) {
-        final DocSet countFilteredFlightsConcerned = DocSetFactory.getDocSetInstance(-1, -1, size, FOCUS.PERFORMANCE);
+    private DocIdSet filterByConflictCount(final ConflictQuery query, DocIdSet flightsConcerned, int size, int maxIndex) {
+        final DocSet countFilteredFlightsConcerned = DocSetFactory.getDocSetInstance(0, maxIndex, size, FOCUS.PERFORMANCE);
         conflictCounters.executeOnEachItem(flightsConcerned, new IClosure<Integer>() {
 
             @Override
@@ -219,21 +274,30 @@ public class LuceneIndexFlightSeason implements FlightSeason {
         return flightsConcerned;
     }
 
-    private SMatrix<FlightPairData> filterConflicts(final DocIdSet flightsConcerned) {
-        final SMatrix<FlightPairData> result = conflictMatrix.transformEachRow(flightsConcerned,
+    private SMatrix<FlightPairData> filterConflicts(final DocIdSet flightsConcerned, final int maxVal) {
+        NotDocIdSet flightsNotConcerned = new NotDocIdSet(flightsConcerned, maxVal);
+        final ITransformer<FlightPairData, FlightPairData> nopFP =ITransformerUtils.nop();
+        
+        final SMatrix<FlightPairData> result1 = conflictMatrix.transformEachRow(flightsNotConcerned,
                 new ITransformer<SVector<FlightPairData>, SVector<FlightPairData>>() {
 
                     @Override
-                    public SVector<FlightPairData> transform(final int i, SVector<FlightPairData> val) {
-                        return val.transform(flightsConcerned, new ITransformer<FlightPairData, FlightPairData>() {
-
-                            @Override
-                            public FlightPairData transform(final int j, FlightPairData fpd) {
-                                return fpd;
-                            }
-                        }, true);
+                    public SVector<FlightPairData> transform(final int i, SVector<FlightPairData> val) {                        
+                        return val.transform(flightsConcerned, nopFP, true);
                     }
                 });
+        final ITransformer<SVector<FlightPairData>, SVector<FlightPairData>> nopFPV =ITransformerUtils.nop();
+        
+        final SMatrix<FlightPairData> result2 = conflictMatrix.transformEachRow(flightsConcerned,nopFPV);
+        final SMatrix<FlightPairData> result = SMatrix.combine(result1, result2, new Combiner<FlightPairData>() {
+
+            @Override
+            public FlightPairData combine(FlightPairData a, FlightPairData b) {
+                return (a != null) ? a : b;
+            }
+            
+        });
+        
         return result;
     }
 

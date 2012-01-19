@@ -1,3 +1,8 @@
 Add the jamon lib to the local repository
 
 mvn install:install-file -Dfile=./lib/jamonall-2.73/binaries/jamon-2.73.jar -DgroupId=com.jamonapi -DartifactId=jamon -Dversion=2.73 -Dpackaging=jar -DgeneratePom=true
+
+
+To call Queries
+
+java -cp prototype-0.0.3-SNAPSHOT-jar-with-dependencies.jar -Xms4024M -Xmx4024M Query -b 50 -t 4 -qt 2 -r 10 -j "Results/jamon-queries-2qt.csv" "Results/6AOmodified.csv" "Results/catalog.csv" "Results/queries.csv"

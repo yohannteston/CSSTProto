@@ -166,7 +166,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
             //            }
             //            to.close();
 
-            LuceneIndexFlightSeason luceneIndexFlightSeason = new LuceneIndexFlightSeason(overlaps,db,searcherManager,uids );
+            LuceneIndexFlightSeason luceneIndexFlightSeason = new LuceneIndexFlightSeason(overlaps,db,searcherManager,uids, bufferDuration );
             if (this.buildMetadataIndex) luceneIndexFlightSeason.buildConflictMatrix();
             return luceneIndexFlightSeason;
 

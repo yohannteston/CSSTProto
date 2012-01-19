@@ -110,7 +110,7 @@ public class BasicTemporalIndexSeasonFactoryTest {
         testQuery(season, new ConflictQuery("LEMD", null, new Date(1301184000000L), new Date(1306627200000L), 0));
         testQuery(season, new ConflictQuery("LEMD", null, new Date(1301184000000L), new Date(1306627200000L), 2));
         
-        JamonUtils.outputJamonReport(null);
+        JamonUtils.outputJamonReport(null, "ms.", false);
         
     }
 

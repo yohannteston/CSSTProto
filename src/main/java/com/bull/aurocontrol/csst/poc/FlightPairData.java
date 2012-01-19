@@ -7,7 +7,7 @@ public class FlightPairData {
     private boolean identicalDigits;
     private boolean parallelCharacters;
     private int overlapTime;
-    
+    private short[][] conflictingSchedules;
     
     public FlightPairData(Flight a, Flight b, int overlapTime) {
         super();
@@ -51,6 +51,12 @@ public class FlightPairData {
     public String toString() {
         return "FlightPairData [a=" + a + ", b=" + b + ", anagram=" + anagram + ", identicalDigits=" + identicalDigits + ", parallelCharacters="
                 + parallelCharacters + ", overlapTime=" + overlapTime + "]";
+    }
+
+
+    public void setConflictingSchedules(short[][] array) {
+        conflictingSchedules = array;
+        
     }
     
     

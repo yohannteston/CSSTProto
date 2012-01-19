@@ -156,7 +156,8 @@ public class Query {
             executorService.shutdown();
             executorService.awaitTermination(10, TimeUnit.DAYS);
 
-            JamonUtils.outputJamonReport(jamon);
+            JamonUtils.outputJamonReport(jamon, "ms.", false);
+            JamonUtils.outputJamonReport(jamon, "count", true);
             
             
 
@@ -189,13 +190,24 @@ public class Query {
 
                 ConflictQuery q = new ConflictQuery(adep, ades, from, to, minimumConflicts);
                 
+                String detailKey = "query";
+                detailKey += "/" + ((adep != null) ? "ADEP" : "*");
+                detailKey += "/" + ((ades != null) ? "ADES" : "*");
+                detailKey += "/" + ((from != null) ? (to.getTime() - from.getTime()) / (24*60*60*1000) : "*");
+                detailKey += "/" + minimumConflicts;
                 Monitor query = MonitorFactory.startPrimary("query");
-                Monitor detail = MonitorFactory.startPrimary("query/" + line);
+                
+                
+                Monitor detail = MonitorFactory.start(detailKey);
                 SMatrix<FlightPairData> conflicts = season.queryConflicts(q);
                 detail.stop();
                 query.stop();
+                int size = conflicts.size();
 
-                System.out.println("QUERY:" + q + " results:" + conflicts.size());
+                MonitorFactory.add("query", "count", (double) size);
+                MonitorFactory.add(detailKey, "count", (double) size);
+                
+                System.out.println("QUERY:" + q + " results:" + size);
                 
                 if (result != null) {
                     resultOutput.append("QUERY:" + q + "\n\n");

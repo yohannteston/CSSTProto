@@ -13,9 +13,9 @@ import org.apache.commons.lang3.StringUtils;
 import com.jamonapi.MonitorFactory;
 
 public class JamonUtils {
-    public static void outputJamonReport(File jamon) throws IOException {
-        String[] header = MonitorFactory.getComposite("ms.").getDisplayHeader();
-        Object[][] data = MonitorFactory.getComposite("ms.").getDisplayData();
+    public static void outputJamonReport(File jamon, String unit, boolean append) throws IOException {
+        String[] header = MonitorFactory.getComposite(unit).getDisplayHeader();
+        Object[][] data = MonitorFactory.getComposite(unit).getDisplayData();
         
         Arrays.sort(data, new Comparator<Object[]>() {
 
@@ -28,7 +28,7 @@ public class JamonUtils {
         
         BufferedWriter jamonWriter;
         if (jamon != null) {
-            jamonWriter = new BufferedWriter(new FileWriter(jamon,false));
+            jamonWriter = new BufferedWriter(new FileWriter(jamon,append));
         } else {
             jamonWriter = new BufferedWriter(new OutputStreamWriter(System.out));
         }

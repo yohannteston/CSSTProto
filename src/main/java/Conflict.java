@@ -110,7 +110,7 @@ public class Conflict {
             }
             
 
-            JamonUtils.outputJamonReport(jamon);
+            JamonUtils.outputJamonReport(jamon, "ms.", false);
             
 //            System.out.println("comparing");
 //            

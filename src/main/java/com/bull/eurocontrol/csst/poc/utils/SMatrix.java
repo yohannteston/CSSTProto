@@ -37,7 +37,13 @@ public class SMatrix<V>   {
         tree.executeOnEachItem(set, closure);        
     }
     public <T> SMatrix<T> transformEachRow(DocIdSet set, ITransformer<SVector<V>, SVector<T>> transformer) {
-        SVector<SVector<T>> newTree = tree.transform(set, transformer, false);    
+        SVector<SVector<T>> newTree;
+        if (set == null) {
+            newTree = tree.transform(transformer, false);                
+        } else  {
+            newTree = tree.transform(set, transformer, false);    
+
+        }
         return new SMatrix<T>(newTree);
     }
     
