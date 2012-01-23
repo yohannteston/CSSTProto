@@ -28,6 +28,7 @@ import org.apache.lucene.index.FieldInfo.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.MergePolicy.OneMerge;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.SearcherManager;
@@ -227,12 +228,6 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
 
             MultiMap flightLocations = prepareLocationIntervals(bufferDuration, flight);
 
-            //                if (i == 2968) {
-            //                    System.out.println(flight);
-            //                    System.out.println(flightLocations);
-            //                }
-
-
             // add values for the week index
             addWeekIndex(doc, i, dowOfFirstDayOfSeason, schedules, numSched, flightLocations);
 
@@ -247,6 +242,7 @@ public class LuceneIndexSeasonFactory implements FlightSeasonFactory {
         }
 
         writer.commit();
+        writer.optimize();
         writer.close();
         System.out.printf("number of schedules : %s\n", totalSchedules);
         return dir;

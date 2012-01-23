@@ -79,6 +79,7 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
         final String prefix = "week_" + location + "_" + NumericUtils.intToPrefixCoded(period);
         final IndexReader reader = index.getIndexReader();
        
+//        if (location.equals("EFTUTMA") && period == 1) debug = true;
         if (debug) {
             
             System.out.println(location + " " + period + ": start ->");
@@ -107,6 +108,9 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
                 // load posting list
                 termDocs.seek(weeksPeriods);
                 int n = termDocs.read(docBuffer, otherBuffer);
+                if (n != weeksPeriods.docFreq()) {
+                    System.out.println("lucene problem");
+                }
                 // map to uids
                 for (int i = 0; i < n; i++) {
                     docBuffer[i] = uids[docBuffer[i]];
@@ -174,7 +178,8 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
 
     private void processTsEntry(String tsKey, int[] docs, int[] tmpBuffer, final int n, Int2IntMap currentFlights, Int2ObjectSortedMap<Int2ObjectSortedMap<FlightPairCounter>> weekCounters) {
         if (tsKey.charAt(0) == '0') { // overlapping flights
-            if (debug) System.out.println(": overlapping  -> " + Arrays.toString(ArrayUtils.subarray(docs,0,n)));
+            if (debug)
+                System.out.println(": overlapping  -> " + Arrays.toString(ArrayUtils.subarray(docs,0,n)));
             addAll(docs, n, currentFlights, 0);
         } else {
             int len = tsKey.length();
@@ -218,11 +223,13 @@ public class ComputeLocationPeriodOverlapTime extends RecursiveTask<SMatrix<Inte
                         }                            
                     } else {
                         if (docj != doci) {
-                            System.out.println("bug");
+                            System.out.println("bug " + doci + " - " + docj);
                         }
                         assert docj == doci;
                         int starti = ej.getIntValue();
-                        iterator.remove();
+                        if (docj == doci) {
+                            iterator.remove();
+                        }
 
                         if (iterator.hasNext()) {
                             Int2ObjectSortedMap<FlightPairCounter> row = getOrCreateRow(weekCounters, doci);
